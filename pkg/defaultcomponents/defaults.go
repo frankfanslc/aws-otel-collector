@@ -17,9 +17,10 @@ package defaultcomponents // import "aws-observability.io/collector/defaultcompo
 
 import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsemfexporter"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsprometheusremotewriteexporter"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsxrayexporter"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/sapmexporter"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/sapmexporter"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsecscontainermetricsreceiver"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsxrayreceiver"
@@ -69,6 +70,7 @@ func Components() (component.Factories, error) {
 	// enable the selected exporters
 	factories.Exporters, err = component.MakeExporterFactoryMap(
 		awsxrayexporter.NewFactory(),
+		awsprometheusremotewriteexporter.NewFactory(),
 		awsemfexporter.NewFactory(),
 		prometheusexporter.NewFactory(),
 		loggingexporter.NewFactory(),
