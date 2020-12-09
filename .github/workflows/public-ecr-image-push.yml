@@ -28,6 +28,9 @@ on:
       imageRepositoryName:
         description: 'the name of the repository where the image code is hosted'
         required: true
+      pathToDockerfile:
+        description: 'the path within the repository to the folder containing the dockerfile'
+        required: true
   
 env:
   ECR_REPO: aws-observability/${{ github.event.inputs.imageName }}
@@ -50,8 +53,7 @@ jobs:
         
       - name: Build Image
         run: |
-          cd aws-otel-community/sample-apps/prometheus
-          docker build . -t ${{ github.event.inputs.imageName }}
+          docker build ${{ github.events.inputs.imageRepositoryName }}/${{ github.events.inputs.pathToDockerfile}} -t ${{ github.event.inputs.imageName }}
       
       - name: upload to ECR
         run: |
