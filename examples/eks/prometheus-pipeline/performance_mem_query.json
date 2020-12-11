@@ -1,0 +1,22 @@
+{
+    "Namespace": "ContainerInsights",
+    "MetricName": "pod_cpu_utilization",
+    "Dimensions": [
+        {
+            "Name": "PodName",
+            "Value": "adot-collector"
+        },
+        {
+            "Name": "ClusterName",
+            "Value": "liujasntest"
+        },
+        {
+            "Name": "Namespace",
+            "Value": "adot-col"
+        }
+    ],
+    "Period": 300,
+    "Statistics": ["Average"],
+    "StartTime": "{{start_time}}",
+    "EndTime": "{{end_time}}"
+}
