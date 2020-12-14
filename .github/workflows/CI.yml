@@ -17,6 +17,7 @@ on:
   push:
     branches:
       - main
+      - test-codeql-scanning
       - release-branch-v*
 
   # from collector and contrib repo
@@ -106,499 +107,490 @@ jobs:
         uses: github/codeql-action/init@v1
         with:
           languages: "go"
-        
-      - name: Download built artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: binary_artifacts
-          path: build
-
-      - name: Display structure of downloaded files
-        run: ls -R
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v1
       
-  packaging-msi:
-    needs: build
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Download built artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: binary_artifacts
-          path: build
-
-      - name: Display structure of downloaded files
-        run: ls -R
-
-      - name: Create msi file using candle and light
-        run: .\tools\packaging\windows\create_msi.ps1
-
-      - name: Upload the msi
-        uses: actions/upload-artifact@v2
-        with:
-          name: msi_artifacts
-          path: build/packages
-
-  packaging-rpm:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      # Build and archive rpms into cache.
-      - uses: actions/checkout@v2
-
-      - name: restore cached binaries
-        uses: actions/cache@v2
-        with:
-          key: "cached_binaries_${{ github.run_id }}"
-          path: build
-
-      - name: Display structure of downloaded files
-        run: ls -R
-
-      - name: Build RPM
-        run: |
-          ARCH=x86_64 DEST=build/packages/linux/amd64 tools/packaging/linux/create_rpm.sh
-          ARCH=aarch64 DEST=build/packages/linux/arm64 tools/packaging/linux/create_rpm.sh
-
-      - name: Download Package Signing GPG key
-        run: |
-          aws secretsmanager get-secret-value --region us-west-2 --secret-id "$PKG_SIGN_PRIVATE_KEY_NAME" | jq -r ".SecretString" > pkg_sign_private.key
-          md5sum pkg_sign_private.key
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.SIGN_PKG_AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.SIGN_PKG_AWS_SECRET_ACCESS_KEY }}
-
-      - name: Import Package Signing GPG Key
-        run: |
-          gpg --import pkg_sign_private.key
-          gpg --list-keys
-          gpg --armor --export -a "aws-otel-collector@amazon.com" > pkg_sign_public.key
-          rpm --import pkg_sign_public.key
-          echo "%_gpg_name aws-otel-collector@amazon.com" > ~/.rpmmacros
-          md5sum pkg_sign_public.key
-          shred -fuvz pkg_sign_private.key
-
-      - name: Sign RPM Pakcage
-        run: |
-          rpmsign --addsign build/packages/linux/*/*.rpm
-
-      - name: Remove Package Signing GPG Key from local GPG Key Ring
-        run: |
-          gpg --fingerprint --with-colons aws-otel-collector@amazon.com grep "^fpr" | sed -n 's/^fpr:::::::::\([[:alnum:]]\+\):/\1/p' | xargs gpg --batch --yes --delete-secret-keys
-          gpg --list-secret-keys
-
-      - name: Cache rpms
-        uses: actions/cache@v2
-        with:
-          key: "cached_rpms_${{ github.run_id }}"
-          path: build/packages
-
-  packaging-deb:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      # Build and archive debs into cache.
-      - uses: actions/checkout@v2
-
-      - name: restore cached binaries
-        uses: actions/cache@v2
-        with:
-          key: "cached_binaries_${{ github.run_id }}"
-          path: build
-
-      - name: Build Debs
-        run: |
-          ARCH=amd64 TARGET_SUPPORTED_ARCH=x86_64 DEST=build/packages/debian/amd64 tools/packaging/debian/create_deb.sh
-          ARCH=arm64 TARGET_SUPPORTED_ARCH=aarch64 DEST=build/packages/debian/arm64 tools/packaging/debian/create_deb.sh
-
-      - name: Download Package Signing GPG key
-        run: |
-          aws secretsmanager get-secret-value --region us-west-2 --secret-id "$PKG_SIGN_PRIVATE_KEY_NAME" | jq -r ".SecretString" > pkg_sign_private.key
-          md5sum pkg_sign_private.key
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.SIGN_PKG_AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.SIGN_PKG_AWS_SECRET_ACCESS_KEY }}
-
-      - name: Import Package Signing GPG Key
-        run: |
-          gpg --import pkg_sign_private.key
-          gpg --list-secret-keys
-          shred -fuvz pkg_sign_private.key
-
-      - name: Sign DEB Pakcage
-        run: |
-          sudo apt install -y dpkg-sig
-          dpkg-sig --sign origin -k "aws-otel-collector@amazon.com" build/packages/debian/*/*.deb
-
-      - name: Remove Package Signing GPG Key from local GPG Key Ring
-        run: |
-          gpg --fingerprint --with-colons aws-otel-collector@amazon.com grep "^fpr" | sed -n 's/^fpr:::::::::\([[:alnum:]]\+\):/\1/p' | xargs gpg --batch --yes --delete-secret-keys
-          gpg --list-secret-keys
-
-      - name: Cache Debs
-        uses: actions/cache@v2
-        with:
-          key: "cached_debs_${{ github.run_id }}"
-          path: build/packages
-
-  packaging-image:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      # Build and archive image into cache
-      - uses: actions/checkout@v2
-
-      - name: restore cached binaries
-        uses: actions/cache@v2
-        with:
-          key: "cached_binaries_${{ github.run_id }}"
-          path: build
-
-      - name: Build Image
-        run: docker build -t $IMAGE_NAME -f cmd/awscollector/Dockerfile .
-
-      - name: Extract the Image file
-        run: |
-          mkdir -p $PACKAGING_ROOT
-          docker save --output $PACKAGING_ROOT/$IMAGE_NAME.tar $IMAGE_NAME
-
-      - name: Cache Image
-        uses: actions/cache@v2
-        with:
-          key: "cached_image_${{ github.run_id }}"
-          path: "${{ env.PACKAGING_ROOT }}"
-
-  e2etest-preparation:
-    runs-on: ubuntu-latest
-    needs: [packaging-rpm, packaging-deb, packaging-msi, packaging-image]
-    outputs:
-      version: ${{ steps.versioning.outputs.version }}
-    steps:
-      # Archive all the packages into one, and build a unique version number for e2etesting
-      - uses: actions/checkout@v2
-
-      - name: Restore cached rpms
-        uses: actions/cache@v2
-        with:
-          key: "cached_rpms_${{ github.run_id }}"
-          path: build/packages
-
-      - name: Restore cached debs
-        uses: actions/cache@v2
-        with:
-          key: "cached_debs_${{ github.run_id }}"
-          path: build/packages
-
-      - name: Restore cached image
-        uses: actions/cache@v2
-        with:
-          key: "cached_image_${{ github.run_id }}"
-          path: build/packages
-
-      - name: Download built artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: msi_artifacts
-          path: build/packages
-
-      - run: ls -R
-
-      - name: Versioning for testing
-        id: versioning
-        run: |
-          # build a version with github run id so that we can distingush each build for integ-test
-          Version="`cat VERSION`-$GITHUB_RUN_ID"
-          echo $Version > build/packages/VERSION
-          cat build/packages/VERSION
-          echo "::set-output name=version::$Version"
-
-      - name: prepare CI&CD stack
-        run: |
-          cp .aoc-stack-test.yml build/packages/
-          cp .aoc-stack-release.yml build/packages/
-
-      - name: Cache the packages
-        uses: actions/cache@v2
-        with:
-          key: "cached_packages_${{ github.run_id }}"
-          path: build/packages
-
-  e2etest-release:
-    runs-on: ubuntu-latest
-    needs: [e2etest-preparation]
-
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
-          aws-region: us-west-2
-
-      - name: restore cached rpms
-        uses: actions/cache@v2
-        with:
-          path: build/packages
-          key: "cached_packages_${{ github.run_id }}"
-
-      - name: upload to s3 in the testing stack
-        uses: aws-observability/aws-otel-collector-test-framework@deprecating
-        with:
-          running_type: release
-          opts: "-t=S3Release -s=build/packages/.aoc-stack-test.yml"
-
-      - name: Login ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: upload to ECR
-        run: |
-          docker load < build/packages/$IMAGE_NAME.tar
-          docker tag $IMAGE_NAME ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO:${{ needs.e2etest-preparation.outputs.version }}
-          docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO:${{ needs.e2etest-preparation.outputs.version }}
-
-          #- name: Login Dockerhub
-          #  uses: docker/login-action@v1
-          #  with:
-          #    registry: ghcr.io
-          #    username: "${{ github.repository_owner }}"
-          #    password: "${{ secrets.CONTAINER_REGISTRY_TOKEN }}"
-
-          #- name: upload to dockerhub
-          #  run: |
-          #    TAG=`cat build/packages/VERSION`
-          #    REPO_NAME="ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME-test"
-          #    docker load < build/packages/$IMAGE_NAME.tar
-          #    docker tag $IMAGE_NAME $REPO_NAME:$TAG
-          #    docker push $REPO_NAME:$TAG
-
-  e2etest-ec2:
-    strategy:
-      max-parallel: 10
-      matrix:
-        ami: [AMAZON_LINUX, AMAZON_LINUX2, A1_AMAZON_LINUX, SUSE_15, SUSE_12, A1_SUSE_15, REDHAT_8, REDHAT_7, REDHAT_6, A1_REDHAT_8, A1_REDHAT_7, CENTOS_7, CENTOS_6, DEBIAN_10, DEBIAN_9, UBUNTU_18_04, UBUNTU_16_04, UBUNTU_14_04, A1_UBUNTU_18_04, A1_UBUNTU_16_04]
-
-    runs-on: ubuntu-latest
-    needs: [e2etest-release]
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
-          aws-region: us-west-2
-
-      - name: restore cached rpms
-        uses: actions/cache@v2
-        with:
-          path: build/packages
-          key: "cached_packages_${{ github.run_id }}"
-
-      - name: place stack
-        run: cp build/packages/.aoc-stack-test.yml ./.aoc-stack.yml
-
-      - name: perform integration test on EC2
-        uses: aws-observability/aws-otel-collector-test-framework@deprecating
-        with:
-          running_type: integ-test
-          opts: "-t=EC2_TEST -s=build/packages/.aoc-stack-test.yml -a=${{ matrix.ami }}"
-
-  get-testing-suites:
-    runs-on: ubuntu-latest
-    outputs:
-      eks-matrix: ${{ steps.set-matrix.outputs.eks-matrix }}
-      ecs-matrix: ${{ steps.set-matrix.outputs.ecs-matrix }}
-      ec2-matrix: ${{ steps.set-matrix.outputs.ec2-matrix }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Setup Python
-        uses: actions/setup-python@v2.1.4
-
-      - name: Get all the testing suites
-        id: set-matrix
-        run: |
-          ec2_matrix=$(python e2etest/get-testcases.py ec2_matrix)
-          ecs_matrix=$(python e2etest/get-testcases.py ecs_matrix)
-          eks_matrix=$(python e2etest/get-testcases.py eks_matrix)
-          echo "::set-output name=eks-matrix::$eks_matrix"
-          echo "::set-output name=ecs-matrix::$ecs_matrix"
-          echo "::set-output name=ec2-matrix::$ec2_matrix"
-      - name: List testing suites
-        run: |
-          echo ${{ steps.set-matrix.outputs.eks-matrix }}
-          echo ${{ steps.set-matrix.outputs.ecs-matrix }}
-          echo ${{ steps.set-matrix.outputs.ec2-matrix }}
-
-  e2etest-ec2-new:
-    runs-on: ubuntu-latest
-    needs: [get-testing-suites, e2etest-release, e2etest-preparation]
-    strategy:
-      max-parallel: 5
-      matrix: ${{ fromJson(needs.get-testing-suites.outputs.ec2-matrix) }}
-
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
-          aws-region: us-west-2
-
-      - name: Set up JDK 1.11
-        uses: actions/setup-java@v1
-        with:
-          java-version: 1.11
-
-      - name: Set up terraform
-        uses: hashicorp/setup-terraform@v1
-
-      - name: Check out testing framework
-        uses: actions/checkout@v2
-        with:
-          repository: 'aws-observability/aws-otel-collector-test-framework'
-          path: testing-framework
-
-      - name: Run testing suite on ec2
-        run: |
-          if [[ -f testing-framework/terraform/testcases/${{ matrix.testcase }}/parameters.tfvars ]] ; then opts="-var-file=../testcases/${{ matrix.testcase }}/parameters.tfvars" ; else opts="" ; fi
-          cd testing-framework/terraform/ec2 && terraform init && terraform apply -auto-approve -lock=false $opts -var="testing_ami=${{ matrix.testing_ami }}" -var="aoc_version=${{ needs.e2etest-preparation.outputs.version }}" -var="testcase=../testcases/${{ matrix.testcase }}"
-      - name: Destroy resources
-        if: ${{ always() }}
-        run: |
-          cd testing-framework/terraform/ec2 && terraform destroy -auto-approve
-
-  e2etest-ecs:
-    runs-on: ubuntu-latest
-    needs: [get-testing-suites, e2etest-release, e2etest-preparation]
-    strategy:
-      max-parallel: 5
-      matrix: ${{ fromJson(needs.get-testing-suites.outputs.ecs-matrix) }}
-
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
-          aws-region: us-west-2
-
-      - name: Set up JDK 1.11
-        uses: actions/setup-java@v1
-        with:
-          java-version: 1.11
-
-      - name: Set up terraform
-        uses: hashicorp/setup-terraform@v1
-
-      - name: Check out testing framework
-        uses: actions/checkout@v2
-        with:
-          repository: 'aws-observability/aws-otel-collector-test-framework'
-          path: testing-framework
-
-      - name: Run testing suite on ecs
-        run: |
-          if [[ -f testing-framework/terraform/testcases/${{ matrix.testcase }}/parameters.tfvars ]] ; then opts="-var-file=../testcases/${{ matrix.testcase }}/parameters.tfvars" ; else opts="" ; fi
-          cd testing-framework/terraform/ecs && terraform init && terraform apply -auto-approve -lock=false $opts -var="ecs_launch_type=${{ matrix.launch_type }}" -var="aoc_version=${{ needs.e2etest-preparation.outputs.version }}" -var="testcase=../testcases/${{ matrix.testcase }}"
-
-      - name: Destroy resources
-        if: ${{ always() }}
-        run: |
-          cd testing-framework/terraform/ecs && terraform destroy -auto-approve
-
-  e2etest-eks:
-    runs-on: ubuntu-latest
-    needs: [get-testing-suites, e2etest-release, e2etest-preparation]
-    strategy:
-      max-parallel: 5
-      matrix: ${{ fromJson(needs.get-testing-suites.outputs.eks-matrix) }}
-
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
-          aws-region: us-west-2
-
-      - name: Set up JDK 1.11
-        uses: actions/setup-java@v1
-        with:
-          java-version: 1.11
-
-      - name: Set up terraform
-        uses: hashicorp/setup-terraform@v1
-
-      - name: Check out testing framework
-        uses: actions/checkout@v2
-        with:
-          repository: 'aws-observability/aws-otel-collector-test-framework'
-          path: testing-framework
-
-      - name: Run testing suite on eks
-        run: |
-          if [[ -f testing-framework/terraform/testcases/${{ matrix.testcase }}/parameters.tfvars ]] ; then opts="-var-file=../testcases/${{ matrix.testcase }}/parameters.tfvars" ; else opts="" ; fi
-          cd testing-framework/terraform/eks && terraform init && terraform apply -auto-approve -lock=false $opts -var="aoc_version=${{ needs.e2etest-preparation.outputs.version }}" -var="testcase=../testcases/${{ matrix.testcase }}"
-
-      - name: Destroy resources
-        if: ${{ always() }}
-        run: |
-          cd testing-framework/terraform/eks && terraform destroy -auto-approve
-
-
-  release-candidate:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' # only create the artifact when there's a push, not for dispatch.
-    needs: [e2etest-eks, e2etest-ecs, e2etest-ec2-new, e2etest-ec2]
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
-          aws-region: us-west-2
-
-      - name: restore cached packages
-        uses: actions/cache@v2
-        with:
-          path: build/packages
-          key: "cached_packages_${{ github.run_id }}"
-
-      - name: prepare production version
-        run: |
-          TESTING_VERSION=`cat build/packages/VERSION`
-          VERSION=`echo $TESTING_VERSION | awk -F "-" '{print $1}'`
-          echo $VERSION > build/packages/VERSION
-          echo $GITHUB_SHA > build/packages/GITHUB_SHA
-          echo $TESTING_VERSION > build/packages/TESTING_VERSION
-
-      - name: upload packages as release candidate on s3
-        uses: aws-observability/aws-otel-collector-test-framework@deprecating
-        with:
-          running_type: candidate
-          opts: "-t=UploadCandidate -s=build/packages/.aoc-stack-test.yml"
-
-      - id: file_changes
-        uses: trilom/file-changes-action@v1.2.3
-        with:
-          fileOutput: ''
-
-      - name: Trigger soaking
-        if: contains(steps.file_changes.outputs.files_modified, 'VERSION')
-        uses: peter-evans/repository-dispatch@v1.1.1
-        with:
-          token: "${{ secrets.REPO_WRITE_ACCESS_TOKEN }}"
-          event-type: bump-version
-          client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
+  # packaging-msi:
+  #   needs: build
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v2
+
+  #     - name: Download built artifacts
+  #       uses: actions/download-artifact@v2
+  #       with:
+  #         name: binary_artifacts
+  #         path: build
+
+  #     - name: Display structure of downloaded files
+  #       run: ls -R
+
+  #     - name: Create msi file using candle and light
+  #       run: .\tools\packaging\windows\create_msi.ps1
+
+  #     - name: Upload the msi
+  #       uses: actions/upload-artifact@v2
+  #       with:
+  #         name: msi_artifacts
+  #         path: build/packages
+
+  # packaging-rpm:
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:
+  #     # Build and archive rpms into cache.
+  #     - uses: actions/checkout@v2
+
+  #     - name: restore cached binaries
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_binaries_${{ github.run_id }}"
+  #         path: build
+
+  #     - name: Display structure of downloaded files
+  #       run: ls -R
+
+  #     - name: Build RPM
+  #       run: |
+  #         ARCH=x86_64 DEST=build/packages/linux/amd64 tools/packaging/linux/create_rpm.sh
+  #         ARCH=aarch64 DEST=build/packages/linux/arm64 tools/packaging/linux/create_rpm.sh
+
+  #     - name: Download Package Signing GPG key
+  #       run: |
+  #         aws secretsmanager get-secret-value --region us-west-2 --secret-id "$PKG_SIGN_PRIVATE_KEY_NAME" | jq -r ".SecretString" > pkg_sign_private.key
+  #         md5sum pkg_sign_private.key
+  #       env:
+  #         AWS_ACCESS_KEY_ID: ${{ secrets.SIGN_PKG_AWS_ACCESS_KEY_ID }}
+  #         AWS_SECRET_ACCESS_KEY: ${{ secrets.SIGN_PKG_AWS_SECRET_ACCESS_KEY }}
+
+  #     - name: Import Package Signing GPG Key
+  #       run: |
+  #         gpg --import pkg_sign_private.key
+  #         gpg --list-keys
+  #         gpg --armor --export -a "aws-otel-collector@amazon.com" > pkg_sign_public.key
+  #         rpm --import pkg_sign_public.key
+  #         echo "%_gpg_name aws-otel-collector@amazon.com" > ~/.rpmmacros
+  #         md5sum pkg_sign_public.key
+  #         shred -fuvz pkg_sign_private.key
+
+  #     - name: Sign RPM Pakcage
+  #       run: |
+  #         rpmsign --addsign build/packages/linux/*/*.rpm
+
+  #     - name: Remove Package Signing GPG Key from local GPG Key Ring
+  #       run: |
+  #         gpg --fingerprint --with-colons aws-otel-collector@amazon.com grep "^fpr" | sed -n 's/^fpr:::::::::\([[:alnum:]]\+\):/\1/p' | xargs gpg --batch --yes --delete-secret-keys
+  #         gpg --list-secret-keys
+
+  #     - name: Cache rpms
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_rpms_${{ github.run_id }}"
+  #         path: build/packages
+
+  # packaging-deb:
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:
+  #     # Build and archive debs into cache.
+  #     - uses: actions/checkout@v2
+
+  #     - name: restore cached binaries
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_binaries_${{ github.run_id }}"
+  #         path: build
+
+  #     - name: Build Debs
+  #       run: |
+  #         ARCH=amd64 TARGET_SUPPORTED_ARCH=x86_64 DEST=build/packages/debian/amd64 tools/packaging/debian/create_deb.sh
+  #         ARCH=arm64 TARGET_SUPPORTED_ARCH=aarch64 DEST=build/packages/debian/arm64 tools/packaging/debian/create_deb.sh
+
+  #     - name: Download Package Signing GPG key
+  #       run: |
+  #         aws secretsmanager get-secret-value --region us-west-2 --secret-id "$PKG_SIGN_PRIVATE_KEY_NAME" | jq -r ".SecretString" > pkg_sign_private.key
+  #         md5sum pkg_sign_private.key
+  #       env:
+  #         AWS_ACCESS_KEY_ID: ${{ secrets.SIGN_PKG_AWS_ACCESS_KEY_ID }}
+  #         AWS_SECRET_ACCESS_KEY: ${{ secrets.SIGN_PKG_AWS_SECRET_ACCESS_KEY }}
+
+  #     - name: Import Package Signing GPG Key
+  #       run: |
+  #         gpg --import pkg_sign_private.key
+  #         gpg --list-secret-keys
+  #         shred -fuvz pkg_sign_private.key
+
+  #     - name: Sign DEB Pakcage
+  #       run: |
+  #         sudo apt install -y dpkg-sig
+  #         dpkg-sig --sign origin -k "aws-otel-collector@amazon.com" build/packages/debian/*/*.deb
+
+  #     - name: Remove Package Signing GPG Key from local GPG Key Ring
+  #       run: |
+  #         gpg --fingerprint --with-colons aws-otel-collector@amazon.com grep "^fpr" | sed -n 's/^fpr:::::::::\([[:alnum:]]\+\):/\1/p' | xargs gpg --batch --yes --delete-secret-keys
+  #         gpg --list-secret-keys
+
+  #     - name: Cache Debs
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_debs_${{ github.run_id }}"
+  #         path: build/packages
+
+  # packaging-image:
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:
+  #     # Build and archive image into cache
+  #     - uses: actions/checkout@v2
+
+  #     - name: restore cached binaries
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_binaries_${{ github.run_id }}"
+  #         path: build
+
+  #     - name: Build Image
+  #       run: docker build -t $IMAGE_NAME -f cmd/awscollector/Dockerfile .
+
+  #     - name: Extract the Image file
+  #       run: |
+  #         mkdir -p $PACKAGING_ROOT
+  #         docker save --output $PACKAGING_ROOT/$IMAGE_NAME.tar $IMAGE_NAME
+
+  #     - name: Cache Image
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_image_${{ github.run_id }}"
+  #         path: "${{ env.PACKAGING_ROOT }}"
+
+  # e2etest-preparation:
+  #   runs-on: ubuntu-latest
+  #   needs: [packaging-rpm, packaging-deb, packaging-msi, packaging-image]
+  #   outputs:
+  #     version: ${{ steps.versioning.outputs.version }}
+  #   steps:
+  #     # Archive all the packages into one, and build a unique version number for e2etesting
+  #     - uses: actions/checkout@v2
+
+  #     - name: Restore cached rpms
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_rpms_${{ github.run_id }}"
+  #         path: build/packages
+
+  #     - name: Restore cached debs
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_debs_${{ github.run_id }}"
+  #         path: build/packages
+
+  #     - name: Restore cached image
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_image_${{ github.run_id }}"
+  #         path: build/packages
+
+  #     - name: Download built artifacts
+  #       uses: actions/download-artifact@v2
+  #       with:
+  #         name: msi_artifacts
+  #         path: build/packages
+
+  #     - run: ls -R
+
+  #     - name: Versioning for testing
+  #       id: versioning
+  #       run: |
+  #         # build a version with github run id so that we can distingush each build for integ-test
+  #         Version="`cat VERSION`-$GITHUB_RUN_ID"
+  #         echo $Version > build/packages/VERSION
+  #         cat build/packages/VERSION
+  #         echo "::set-output name=version::$Version"
+
+  #     - name: prepare CI&CD stack
+  #       run: |
+  #         cp .aoc-stack-test.yml build/packages/
+  #         cp .aoc-stack-release.yml build/packages/
+
+  #     - name: Cache the packages
+  #       uses: actions/cache@v2
+  #       with:
+  #         key: "cached_packages_${{ github.run_id }}"
+  #         path: build/packages
+
+  # e2etest-release:
+  #   runs-on: ubuntu-latest
+  #   needs: [e2etest-preparation]
+
+  #   steps:
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
+  #         aws-region: us-west-2
+
+  #     - name: restore cached rpms
+  #       uses: actions/cache@v2
+  #       with:
+  #         path: build/packages
+  #         key: "cached_packages_${{ github.run_id }}"
+
+  #     - name: upload to s3 in the testing stack
+  #       uses: aws-observability/aws-otel-collector-test-framework@deprecating
+  #       with:
+  #         running_type: release
+  #         opts: "-t=S3Release -s=build/packages/.aoc-stack-test.yml"
+
+  #     - name: Login ECR
+  #       id: login-ecr
+  #       uses: aws-actions/amazon-ecr-login@v1
+
+  #     - name: upload to ECR
+  #       run: |
+  #         docker load < build/packages/$IMAGE_NAME.tar
+  #         docker tag $IMAGE_NAME ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO:${{ needs.e2etest-preparation.outputs.version }}
+  #         docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPO:${{ needs.e2etest-preparation.outputs.version }}
+
+  #         #- name: Login Dockerhub
+  #         #  uses: docker/login-action@v1
+  #         #  with:
+  #         #    registry: ghcr.io
+  #         #    username: "${{ github.repository_owner }}"
+  #         #    password: "${{ secrets.CONTAINER_REGISTRY_TOKEN }}"
+
+  #         #- name: upload to dockerhub
+  #         #  run: |
+  #         #    TAG=`cat build/packages/VERSION`
+  #         #    REPO_NAME="ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME-test"
+  #         #    docker load < build/packages/$IMAGE_NAME.tar
+  #         #    docker tag $IMAGE_NAME $REPO_NAME:$TAG
+  #         #    docker push $REPO_NAME:$TAG
+
+  # e2etest-ec2:
+  #   strategy:
+  #     max-parallel: 10
+  #     matrix:
+  #       ami: [AMAZON_LINUX, AMAZON_LINUX2, A1_AMAZON_LINUX, SUSE_15, SUSE_12, A1_SUSE_15, REDHAT_8, REDHAT_7, REDHAT_6, A1_REDHAT_8, A1_REDHAT_7, CENTOS_7, CENTOS_6, DEBIAN_10, DEBIAN_9, UBUNTU_18_04, UBUNTU_16_04, UBUNTU_14_04, A1_UBUNTU_18_04, A1_UBUNTU_16_04]
+
+  #   runs-on: ubuntu-latest
+  #   needs: [e2etest-release]
+  #   steps:
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
+  #         aws-region: us-west-2
+
+  #     - name: restore cached rpms
+  #       uses: actions/cache@v2
+  #       with:
+  #         path: build/packages
+  #         key: "cached_packages_${{ github.run_id }}"
+
+  #     - name: place stack
+  #       run: cp build/packages/.aoc-stack-test.yml ./.aoc-stack.yml
+
+  #     - name: perform integration test on EC2
+  #       uses: aws-observability/aws-otel-collector-test-framework@deprecating
+  #       with:
+  #         running_type: integ-test
+  #         opts: "-t=EC2_TEST -s=build/packages/.aoc-stack-test.yml -a=${{ matrix.ami }}"
+
+  # get-testing-suites:
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     eks-matrix: ${{ steps.set-matrix.outputs.eks-matrix }}
+  #     ecs-matrix: ${{ steps.set-matrix.outputs.ecs-matrix }}
+  #     ec2-matrix: ${{ steps.set-matrix.outputs.ec2-matrix }}
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v2
+
+  #     - name: Setup Python
+  #       uses: actions/setup-python@v2.1.4
+
+  #     - name: Get all the testing suites
+  #       id: set-matrix
+  #       run: |
+  #         ec2_matrix=$(python e2etest/get-testcases.py ec2_matrix)
+  #         ecs_matrix=$(python e2etest/get-testcases.py ecs_matrix)
+  #         eks_matrix=$(python e2etest/get-testcases.py eks_matrix)
+  #         echo "::set-output name=eks-matrix::$eks_matrix"
+  #         echo "::set-output name=ecs-matrix::$ecs_matrix"
+  #         echo "::set-output name=ec2-matrix::$ec2_matrix"
+  #     - name: List testing suites
+  #       run: |
+  #         echo ${{ steps.set-matrix.outputs.eks-matrix }}
+  #         echo ${{ steps.set-matrix.outputs.ecs-matrix }}
+  #         echo ${{ steps.set-matrix.outputs.ec2-matrix }}
+
+  # e2etest-ec2-new:
+  #   runs-on: ubuntu-latest
+  #   needs: [get-testing-suites, e2etest-release, e2etest-preparation]
+  #   strategy:
+  #     max-parallel: 5
+  #     matrix: ${{ fromJson(needs.get-testing-suites.outputs.ec2-matrix) }}
+
+  #   steps:
+  #     - uses: actions/checkout@v2
+
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
+  #         aws-region: us-west-2
+
+  #     - name: Set up JDK 1.11
+  #       uses: actions/setup-java@v1
+  #       with:
+  #         java-version: 1.11
+
+  #     - name: Set up terraform
+  #       uses: hashicorp/setup-terraform@v1
+
+  #     - name: Check out testing framework
+  #       uses: actions/checkout@v2
+  #       with:
+  #         repository: 'aws-observability/aws-otel-collector-test-framework'
+  #         path: testing-framework
+
+  #     - name: Run testing suite on ec2
+  #       run: |
+  #         if [[ -f testing-framework/terraform/testcases/${{ matrix.testcase }}/parameters.tfvars ]] ; then opts="-var-file=../testcases/${{ matrix.testcase }}/parameters.tfvars" ; else opts="" ; fi
+  #         cd testing-framework/terraform/ec2 && terraform init && terraform apply -auto-approve -lock=false $opts -var="testing_ami=${{ matrix.testing_ami }}" -var="aoc_version=${{ needs.e2etest-preparation.outputs.version }}" -var="testcase=../testcases/${{ matrix.testcase }}"
+  #     - name: Destroy resources
+  #       if: ${{ always() }}
+  #       run: |
+  #         cd testing-framework/terraform/ec2 && terraform destroy -auto-approve
+
+  # e2etest-ecs:
+  #   runs-on: ubuntu-latest
+  #   needs: [get-testing-suites, e2etest-release, e2etest-preparation]
+  #   strategy:
+  #     max-parallel: 5
+  #     matrix: ${{ fromJson(needs.get-testing-suites.outputs.ecs-matrix) }}
+
+  #   steps:
+  #     - uses: actions/checkout@v2
+
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
+  #         aws-region: us-west-2
+
+  #     - name: Set up JDK 1.11
+  #       uses: actions/setup-java@v1
+  #       with:
+  #         java-version: 1.11
+
+  #     - name: Set up terraform
+  #       uses: hashicorp/setup-terraform@v1
+
+  #     - name: Check out testing framework
+  #       uses: actions/checkout@v2
+  #       with:
+  #         repository: 'aws-observability/aws-otel-collector-test-framework'
+  #         path: testing-framework
+
+  #     - name: Run testing suite on ecs
+  #       run: |
+  #         if [[ -f testing-framework/terraform/testcases/${{ matrix.testcase }}/parameters.tfvars ]] ; then opts="-var-file=../testcases/${{ matrix.testcase }}/parameters.tfvars" ; else opts="" ; fi
+  #         cd testing-framework/terraform/ecs && terraform init && terraform apply -auto-approve -lock=false $opts -var="ecs_launch_type=${{ matrix.launch_type }}" -var="aoc_version=${{ needs.e2etest-preparation.outputs.version }}" -var="testcase=../testcases/${{ matrix.testcase }}"
+
+  #     - name: Destroy resources
+  #       if: ${{ always() }}
+  #       run: |
+  #         cd testing-framework/terraform/ecs && terraform destroy -auto-approve
+
+  # e2etest-eks:
+  #   runs-on: ubuntu-latest
+  #   needs: [get-testing-suites, e2etest-release, e2etest-preparation]
+  #   strategy:
+  #     max-parallel: 5
+  #     matrix: ${{ fromJson(needs.get-testing-suites.outputs.eks-matrix) }}
+
+  #   steps:
+  #     - uses: actions/checkout@v2
+
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
+  #         aws-region: us-west-2
+
+  #     - name: Set up JDK 1.11
+  #       uses: actions/setup-java@v1
+  #       with:
+  #         java-version: 1.11
+
+  #     - name: Set up terraform
+  #       uses: hashicorp/setup-terraform@v1
+
+  #     - name: Check out testing framework
+  #       uses: actions/checkout@v2
+  #       with:
+  #         repository: 'aws-observability/aws-otel-collector-test-framework'
+  #         path: testing-framework
+
+  #     - name: Run testing suite on eks
+  #       run: |
+  #         if [[ -f testing-framework/terraform/testcases/${{ matrix.testcase }}/parameters.tfvars ]] ; then opts="-var-file=../testcases/${{ matrix.testcase }}/parameters.tfvars" ; else opts="" ; fi
+  #         cd testing-framework/terraform/eks && terraform init && terraform apply -auto-approve -lock=false $opts -var="aoc_version=${{ needs.e2etest-preparation.outputs.version }}" -var="testcase=../testcases/${{ matrix.testcase }}"
+
+  #     - name: Destroy resources
+  #       if: ${{ always() }}
+  #       run: |
+  #         cd testing-framework/terraform/eks && terraform destroy -auto-approve
+
+
+  # release-candidate:
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push' # only create the artifact when there's a push, not for dispatch.
+  #   needs: [e2etest-eks, e2etest-ecs, e2etest-ec2-new, e2etest-ec2]
+  #   steps:
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.INTEG_TEST_AWS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.INTEG_TEST_AWS_KEY_SECRET }}
+  #         aws-region: us-west-2
+
+  #     - name: restore cached packages
+  #       uses: actions/cache@v2
+  #       with:
+  #         path: build/packages
+  #         key: "cached_packages_${{ github.run_id }}"
+
+  #     - name: prepare production version
+  #       run: |
+  #         TESTING_VERSION=`cat build/packages/VERSION`
+  #         VERSION=`echo $TESTING_VERSION | awk -F "-" '{print $1}'`
+  #         echo $VERSION > build/packages/VERSION
+  #         echo $GITHUB_SHA > build/packages/GITHUB_SHA
+  #         echo $TESTING_VERSION > build/packages/TESTING_VERSION
+
+  #     - name: upload packages as release candidate on s3
+  #       uses: aws-observability/aws-otel-collector-test-framework@deprecating
+  #       with:
+  #         running_type: candidate
+  #         opts: "-t=UploadCandidate -s=build/packages/.aoc-stack-test.yml"
+
+  #     - id: file_changes
+  #       uses: trilom/file-changes-action@v1.2.3
+  #       with:
+  #         fileOutput: ''
+
+  #     - name: Trigger soaking
+  #       if: contains(steps.file_changes.outputs.files_modified, 'VERSION')
+  #       uses: peter-evans/repository-dispatch@v1.1.1
+  #       with:
+  #         token: "${{ secrets.REPO_WRITE_ACCESS_TOKEN }}"
+  #         event-type: bump-version
+  #         client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
