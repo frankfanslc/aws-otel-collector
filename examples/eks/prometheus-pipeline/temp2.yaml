@@ -44,10 +44,10 @@ data:
     exporters:
       awsprometheusremotewrite:
         # replace this with your endpoint
-        endpoint: "https://aps-workspaces.{{region}}.amazonaws.com/workspaces/{{workspace}}/api/v1/remote_write"
+        endpoint: "https://aps-workspaces.us-west-2.amazonaws.com/workspaces/ws-e5a220a3-733e-46dd-a6d5-5685c1800362/api/v1/remote_write"
         # replace this with your region
         aws_auth:
-          region: "{{region}}"
+          region: "us-west-2"
           service: "aps"
         namespace: "adot"
       logging:
