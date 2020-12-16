@@ -12,7 +12,7 @@ func main() {
 	replicas := 10
 	metricLoad := 10
 	region := "us-west-2"
-	workspace := "workspace"
+	workspace := "ws-d26f26bf-360d-480c-93f0-54bd7270f997"
 
 	startTime := time.Now().UTC().Format(time.RFC3339)[:19] + ".000Z"
 

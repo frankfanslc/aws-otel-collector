@@ -20,6 +20,7 @@ sed "s/{{region}}/$region/g" eks-prometheus-sidecar.yaml | sed "s/{{workspace}}/
 kubectl apply -f temp.yaml
 kubectl apply -f temp2.yaml
 kubectl apply -f cwagent-daemonset.yaml
+kubectl apply -f cwagent-configmap.yaml
 
 echo "letting performance tests run"
 

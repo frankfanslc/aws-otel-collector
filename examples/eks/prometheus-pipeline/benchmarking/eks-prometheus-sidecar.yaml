@@ -40,6 +40,23 @@ data:
             - source_labels: [__meta_kubernetes_service_annotation_scrape]
               action: keep
               regex: true
+            - action: labelmap
+              regex: __meta_kubernetes_pod_label_(.+)      
+            - action: replace
+              source_labels: [__meta_kubernetes_namespace]
+              target_label: Namespace
+            - action: replace
+              source_labels: [__meta_kubernetes_service_name]
+              target_label: Service
+            - action: replace
+              source_labels: [__meta_kubernetes_pod_node_name]
+              target_label: kubernetes_node
+            - action: replace
+              source_labels: [__meta_kubernetes_pod_name]
+              target_label: pod_name
+            - action: replace
+              source_labels: [__meta_kubernetes_pod_container_name]
+              target_label: container_name
 
     exporters:
       awsprometheusremotewrite:
@@ -49,7 +66,7 @@ data:
         aws_auth:
           region: "{{region}}"
           service: "aps"
-        namespace: "adot"
+        namespace: "benchmarking"
       logging:
         loglevel: debug
 

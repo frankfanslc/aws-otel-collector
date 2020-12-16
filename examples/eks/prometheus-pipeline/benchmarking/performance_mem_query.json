@@ -1,6 +1,6 @@
 {
     "Namespace": "ContainerInsights",
-    "MetricName": "pod_cpu_utilization",
+    "MetricName": "pod_memory_utilization",
     "Dimensions": [
         {
             "Name": "PodName",
@@ -8,7 +8,7 @@
         },
         {
             "Name": "ClusterName",
-            "Value": "liujasntest"
+            "Value": "extravagant-hideout-1601662793"
         },
         {
             "Name": "Namespace",
