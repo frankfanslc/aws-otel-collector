@@ -38,5 +38,6 @@ kubectl delete -f temp2.yaml
 kubectl delete -f cwagent-daemonset.yaml
 
 rm temp.yaml
+rm temp2.yaml
 rm temp.json
 rm temp2.json

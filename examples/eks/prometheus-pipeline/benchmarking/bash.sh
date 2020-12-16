@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts r:w:m:rp: flag
+while getopts r:w:m:p: flag
 do
     case "${flag}" in
         r) region=${OPTARG};;
