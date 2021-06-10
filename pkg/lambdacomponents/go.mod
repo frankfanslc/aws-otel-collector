@@ -5,6 +5,7 @@ go 1.14
 require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsemfexporter v0.27.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsxrayexporter v0.27.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsprometheusremotewriteexporter v0.27.0
 	github.com/stretchr/testify v1.7.0
 	go.opentelemetry.io/collector v0.27.0
 )
